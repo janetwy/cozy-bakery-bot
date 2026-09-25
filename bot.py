@@ -104,6 +104,15 @@ class CustomEditModal(discord.ui.Modal):
             )
             return
 
+        message = interaction.message
+
+        if message is None or session.openai_response_id is None:
+            await interaction.followup.send(
+                "This caption session can't be revised because its message or AI response is unavailable.",
+                ephemeral=True
+            )
+            return
+
         try:
 
             caption, response_id = await revise_caption(
@@ -118,7 +127,7 @@ class CustomEditModal(discord.ui.Modal):
                 response_id
             )
 
-            await interaction.message.edit(
+            await message.edit(
                 content=caption_message(caption),
                 view=CaptionControls(self.session_id)
             )
@@ -165,6 +174,15 @@ class CaptionControls(discord.ui.View):
 
             return
 
+        message = interaction.message
+
+        if message is None or session.openai_response_id is None:
+            await interaction.followup.send(
+                "This caption session can't be revised because its message or AI response is unavailable.",
+                ephemeral=True
+            )
+            return
+
         try:
 
             caption, response_id = await revise_caption(
@@ -179,7 +197,7 @@ class CaptionControls(discord.ui.View):
                 response_id
             )
 
-            await interaction.message.edit(
+            await message.edit(
                 content=caption_message(caption),
                 view=CaptionControls(self.session_id)
             )

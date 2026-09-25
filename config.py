@@ -9,7 +9,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 channel_id = os.getenv("CAPTION_CHANNEL_ID", "").strip()
 CAPTION_CHANNEL_ID = int(channel_id) if channel_id else None
 
-OPENAI_MODEL = "gpt-5.4-mini"
+OPENAI_MODEL = "gpt-5.6-sol"
+OPENAI_REASONING_EFFORT = "high"
 
 BAKERY_PROFILE = """
 You are the Instagram caption assistant for Cozy Cakes & Bakes,

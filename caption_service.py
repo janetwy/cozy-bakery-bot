@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 from config import (
     OPENAI_API_KEY,
     OPENAI_MODEL,
+    OPENAI_REASONING_EFFORT,
     BAKERY_PROFILE
 )
 
@@ -30,18 +31,34 @@ async def generate_caption(
     content.append({
         "type": "input_text",
         "text": f"""
-Create an Instagram caption for the bakery.
+    Create a polished Instagram caption for Cozy Cakes & Bakes.
 
-BAKER'S NOTES:
-{notes}
+    BAKER'S NOTES:
+    {notes}
 
-Carefully examine all attached photos.
+    Carefully analyze ALL attached photos before writing the caption.
 
-Use the photos to understand the product and presentation,
-but do not invent details that cannot reasonably be determined.
+    Consider:
+    - What baked good is shown
+    - Its texture, appearance, filling, topping, and presentation
+    - Which visual qualities would make it appealing to a customer
+    - What information from the baker's notes is most important
+    - What would make a strong but natural opening line
+    - How to make the caption sound personally written by a small
+    home baker rather than generated marketing copy
+    - Whether emojis improve the caption or feel unnecessary
+    - Which hashtags are actually relevant
 
-Follow the bakery profile and return only the final caption.
-"""
+    Do not invent ingredients, flavors, prices, ordering methods,
+    or product characteristics that aren't supported by the photos
+    or baker's notes.
+
+    Internally consider multiple possible caption approaches and
+    choose the strongest one.
+
+    Return ONLY the finished Instagram caption.
+    Do not show your analysis, alternatives, or reasoning.
+    """
     })
 
     for image_url in image_urls:
@@ -52,6 +69,9 @@ Follow the bakery profile and return only the final caption.
 
     response = await client.responses.create(
         model=OPENAI_MODEL,
+        reasoning={
+            "effort": OPENAI_REASONING_EFFORT
+        },
         instructions=BAKERY_PROFILE,
         input=[
             {
@@ -88,6 +108,9 @@ Return ONLY the complete revised Instagram caption.
 
     response = await client.responses.create(
         model=OPENAI_MODEL,
+        reasoning={
+            "effort": OPENAI_REASONING_EFFORT
+        },
         previous_response_id=previous_response_id,
         input=prompt
     )
