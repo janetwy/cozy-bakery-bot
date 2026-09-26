@@ -1,4 +1,5 @@
 import json
+import re
 import discord
 
 from discord.ext import commands
@@ -10,6 +11,8 @@ from config import (
 )
 
 from database import (
+    get_caption_sessions,
+    save_caption_display,
     initialize_database,
     create_session,
     create_version,
@@ -36,7 +39,19 @@ from caption_service import (
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(
+class BakeryBot(commands.Bot):
+    async def setup_hook(self):
+        initialize_database()
+        self.controls_restored = False
+        for session in get_caption_sessions():
+            if session.caption_message_id:
+                self.add_view(
+                    CaptionControls(session.id, session.displayed_version),
+                    message_id=session.caption_message_id
+                )
+
+
+bot = BakeryBot(
     command_prefix="!",
     intents=intents
 )
@@ -164,6 +179,10 @@ class CustomEditModal(discord.ui.Modal):
                     self.session_id,
                     new_version.version_number
                 )
+            )
+
+            save_caption_display(
+                self.session_id, interaction.message.id, new_version.version_number
             )
 
         except Exception as error:
@@ -317,6 +336,8 @@ class CaptionControls(discord.ui.View):
             )
         )
 
+        save_caption_display(self.session_id, interaction.message.id, version_number)
+
 
     async def perform_revision(
         self,
@@ -377,6 +398,7 @@ class CaptionControls(discord.ui.View):
 
     @discord.ui.button(
         label="Regenerate",
+        custom_id="caption:regenerate",
         emoji="🔄",
         style=discord.ButtonStyle.secondary,
         row=0
@@ -403,6 +425,7 @@ but maintain the Cozy Cakes & Bakes brand voice.
 
     @discord.ui.button(
         label="Shorter",
+        custom_id="caption:shorter",
         emoji="✂️",
         style=discord.ButtonStyle.secondary,
         row=0
@@ -427,6 +450,7 @@ pricing if present, and useful hashtags.
 
     @discord.ui.button(
         label="More Casual",
+        custom_id="caption:more_casual",
         emoji="😊",
         style=discord.ButtonStyle.secondary,
         row=0
@@ -451,6 +475,7 @@ of a small local bakery.
 
     @discord.ui.button(
         label="More Sales-Focused",
+        custom_id="caption:more_sales_focused",
         emoji="🛍️",
         style=discord.ButtonStyle.secondary,
         row=0
@@ -478,6 +503,7 @@ Do not invent ordering instructions.
 
     @discord.ui.button(
         label="Custom Edit",
+        custom_id="caption:custom_edit",
         emoji="✏️",
         style=discord.ButtonStyle.primary,
         row=0
@@ -502,6 +528,7 @@ Do not invent ordering instructions.
 
     @discord.ui.button(
         label="Previous",
+        custom_id="caption:previous",
         emoji="◀️",
         style=discord.ButtonStyle.secondary,
         row=1
@@ -533,6 +560,7 @@ Do not invent ordering instructions.
 
     @discord.ui.button(
         label="Next",
+        custom_id="caption:next",
         emoji="▶️",
         style=discord.ButtonStyle.secondary,
         row=1
@@ -565,6 +593,7 @@ Do not invent ordering instructions.
 
     @discord.ui.button(
         label="Finalize",
+        custom_id="caption:finalize",
         emoji="⭐",
         style=discord.ButtonStyle.success,
         row=1
@@ -645,12 +674,63 @@ Do not invent ordering instructions.
                 ephemeral=True
             )
 
+
 # ---------------------------------------------------------
 # Bot events
 # ---------------------------------------------------------
 
+async def restore_caption_messages():
+    legacy_channels = {}
+    for session in get_caption_sessions():
+        if not session.caption_message_id:
+            legacy_channels.setdefault(session.discord_channel_id, {})[session.discord_message_id] = session
+        else:
+            try:
+                channel = bot.get_channel(session.discord_channel_id)
+                if channel is None:
+                    channel = await bot.fetch_channel(session.discord_channel_id)
+                message = await channel.fetch_message(session.caption_message_id)
+                await restore_caption_message(message, session)
+            except discord.HTTPException as error:
+                print(f"Could not restore caption session {session.id}: {error}")
+
+    for channel_id, pending in legacy_channels.items():
+        try:
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(channel_id)
+            async for message in channel.history(limit=None, oldest_first=False):
+                if message.author.id != bot.user.id or not message.reference:
+                    continue
+                session = pending.get(message.reference.message_id)
+                if session and await restore_caption_message(message, session):
+                    pending.pop(session.discord_message_id)
+                if not pending:
+                    break
+            for session in pending.values():
+                print(f"Could not find legacy caption reply for session {session.id}")
+        except discord.HTTPException as error:
+            print(f"Could not restore caption channel {channel_id}: {error}")
+
+
+async def restore_caption_message(message, session):
+    match = re.match(r"\*\*Instagram Caption — Version (\d+)/", message.content)
+    if not match:
+        return False
+    version_number = int(match.group(1))
+    if get_version_by_number(session.id, version_number) is None:
+        return False
+    await message.edit(view=CaptionControls(session.id, version_number))
+    save_caption_display(session.id, message.id, version_number)
+    return True
+
+
 @bot.event
 async def on_ready():
+
+    if not bot.controls_restored:
+        bot.controls_restored = True
+        await restore_caption_messages()
 
     print("--------------------------------")
     print(f"Logged in as {bot.user}")
@@ -732,6 +812,8 @@ async def on_message(message: discord.Message):
                 displayed_version=1
             )
         )
+
+        save_caption_display(session_id, status_message.id, 1)
 
     except Exception as error:
 

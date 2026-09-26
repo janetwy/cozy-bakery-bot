@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -16,6 +17,8 @@ class CaptionSession:
     is_finalized: bool
     approved_version_id: Optional[int]
     finalized_discord_message_id: Optional[int]
+    caption_message_id: Optional[int]
+    displayed_version: int
 
 
 @dataclass
@@ -28,8 +31,14 @@ class CaptionVersion:
     revision_type: str
 
 
+@contextmanager
 def get_connection():
-    return sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def initialize_database():
@@ -57,6 +66,14 @@ def initialize_database():
         except sqlite3.OperationalError:
             # Column already exists
             pass
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(caption_sessions)")}
+        for name, definition in (
+            ("caption_message_id", "INTEGER"),
+            ("displayed_version", "INTEGER NOT NULL DEFAULT 1"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE caption_sessions ADD COLUMN {name} {definition}")
 
         # Individual caption versions
         conn.execute("""
@@ -344,3 +361,18 @@ def set_finalized_discord_message(
         ))
 
         conn.commit()
+
+def get_caption_sessions() -> list[CaptionSession]:
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        return [CaptionSession(**dict(row)) for row in
+                conn.execute("SELECT * FROM caption_sessions")]
+
+
+def save_caption_display(session_id: int, message_id: int, version_number: int):
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE caption_sessions
+            SET caption_message_id = ?, displayed_version = ?
+            WHERE id = ?
+        """, (message_id, version_number, session_id))
