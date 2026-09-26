@@ -201,44 +201,56 @@ async def post_finalized_caption(
             FINALIZED_CHANNEL_ID
         )
 
-    # These are the original Discord attachment URLs
-    # saved when the product-photo message was created.
-    image_urls = json.loads(session.image_urls)
-
-    # Putting the URLs in the Discord message causes
-    # Discord to render them as image previews/embeds.
-    image_section = "\n".join(image_urls)
-
     message_content = (
         "## ⭐ Ready to Post\n\n"
         f"### Caption\n"
         f"{version.caption}\n\n"
-        f"*Version {version.version_number}*\n\n"
-        f"{image_section}"
+        f"*Version {version.version_number}*"
     )
 
-    # Update the existing ready-to-post message if this session
-    # has already been finalized.
-    if session.finalized_discord_message_id:
-        try:
-            existing_message = await channel.fetch_message(
-                session.finalized_discord_message_id
-            )
+    # Fetch the original message for fresh attachment URLs and filenames.
+    source_channel = bot.get_channel(session.discord_channel_id)
+    if source_channel is None:
+        source_channel = await bot.fetch_channel(session.discord_channel_id)
 
-            await existing_message.edit(
-                content=message_content
-            )
-
-            return existing_message
-
-        except discord.NotFound:
-            # It was manually deleted from #ready-to-post.
-            # Create a new message instead.
-            pass
-
-    finalized_message = await channel.send(
-        content=message_content
+    source_message = await source_channel.fetch_message(
+        session.discord_message_id
     )
+    images = [attachment for attachment in source_message.attachments
+              if is_image(attachment)]
+    if not images:
+        raise RuntimeError("Could not retrieve any of the original photos.")
+
+    files = []
+    try:
+        # Download all photos into memory before changing the existing post.
+        for attachment in images:
+            files.append(await attachment.to_file())
+
+        existing_message = None
+        if session.finalized_discord_message_id:
+            try:
+                existing_message = await channel.fetch_message(
+                    session.finalized_discord_message_id
+                )
+            except discord.NotFound:
+                # The ready-to-post message was manually deleted.
+                pass
+
+        if existing_message is not None:
+            return await existing_message.edit(
+                content=message_content,
+                attachments=files,
+                embeds=[]
+            )
+
+        finalized_message = await channel.send(
+            content=message_content,
+            files=files
+        )
+    finally:
+        for file in files:
+            file.close()
 
     set_finalized_discord_message(
         session_id,
