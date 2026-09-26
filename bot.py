@@ -19,6 +19,7 @@ from database import (
     get_latest_version,
     get_version_count,
     finalize_version,
+    get_approved_captions,
     set_finalized_discord_message
 )
 
@@ -684,9 +685,14 @@ async def on_message(message: discord.Message):
 
     try:
 
+        approved_captions = get_approved_captions(
+            limit=5
+        )
+
         caption, response_id = await generate_caption(
             user_notes=user_notes,
-            image_urls=image_urls
+            image_urls=image_urls,
+            approved_captions=approved_captions
         )
 
         session_id = create_session(
