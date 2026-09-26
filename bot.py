@@ -210,10 +210,10 @@ async def post_finalized_caption(
 
     message_content = (
         "## ⭐ Ready to Post\n\n"
-        f"{image_section}\n\n"
         f"### Caption\n"
         f"{version.caption}\n\n"
-        f"*Version {version.version_number}*"
+        f"*Version {version.version_number}*\n\n"
+        f"{image_section}"
     )
 
     # Update the existing ready-to-post message if this session
