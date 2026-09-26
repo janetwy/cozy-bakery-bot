@@ -15,6 +15,7 @@ class CaptionSession:
     image_urls: str
     is_finalized: bool
     approved_version_id: Optional[int]
+    finalized_discord_message_id: Optional[int]
 
 
 @dataclass
@@ -43,9 +44,19 @@ def initialize_database():
                 user_notes TEXT NOT NULL,
                 image_urls TEXT NOT NULL,
                 is_finalized INTEGER NOT NULL DEFAULT 0,
-                approved_version_id INTEGER
+                approved_version_id INTEGER,
+                finalized_discord_message_id INTEGER
             )
         """)
+
+        try:
+            conn.execute("""
+                ALTER TABLE caption_sessions
+                ADD COLUMN finalized_discord_message_id INTEGER
+            """)
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
 
         # Individual caption versions
         conn.execute("""
@@ -315,3 +326,21 @@ def get_approved_captions(
         """, (limit,)).fetchall()
 
         return [row[0] for row in rows]
+
+def set_finalized_discord_message(
+    session_id: int,
+    message_id: int
+):
+
+    with get_connection() as conn:
+
+        conn.execute("""
+            UPDATE caption_sessions
+            SET finalized_discord_message_id = ?
+            WHERE id = ?
+        """, (
+            message_id,
+            session_id
+        ))
+
+        conn.commit()

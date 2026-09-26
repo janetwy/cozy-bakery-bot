@@ -14,7 +14,8 @@ client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 async def generate_caption(
     user_notes: str,
-    image_urls: list[str]
+    image_urls: list[str],
+    approved_captions: list[str] | None = None
 ) -> tuple[str, str]:
 
     content = []
@@ -28,6 +29,37 @@ async def generate_caption(
             "from the photos."
         )
 
+    if approved_captions:
+
+        examples = "\n\n".join(
+            f"EXAMPLE {index + 1}:\n{caption}"
+            for index, caption
+            in enumerate(approved_captions)
+        )
+
+        style_examples = f"""
+    PREVIOUSLY APPROVED CAPTIONS:
+
+    The bakery owner previously selected the captions below as
+    captions they liked and approved.
+
+    Use them as examples of the owner's preferred writing style,
+    tone, length, formatting, emoji usage, and overall voice.
+
+    Do NOT copy phrases or sentences from these examples.
+    Do NOT assume product details from these examples apply to
+    the current product.
+
+    {examples}
+    """
+
+    else:
+
+        style_examples = """
+    There are no previously approved caption examples yet.
+    Follow the bakery brand profile.
+    """
+
     content.append({
         "type": "input_text",
         "text": f"""
@@ -35,6 +67,8 @@ async def generate_caption(
 
     BAKER'S NOTES:
     {notes}
+
+    {style_examples}
 
     Carefully analyze ALL attached photos before writing the caption.
 
@@ -48,6 +82,14 @@ async def generate_caption(
     home baker rather than generated marketing copy
     - Whether emojis improve the caption or feel unnecessary
     - Which hashtags are actually relevant
+
+    The previously approved captions are STYLE REFERENCES ONLY.
+
+    Never copy product details, prices, flavors, ingredients,
+    or other factual information from previous captions.
+
+    For factual information about the current product, rely ONLY
+    on the current baker's notes and attached photos.
 
     Do not invent ingredients, flavors, prices, ordering methods,
     or product characteristics that aren't supported by the photos

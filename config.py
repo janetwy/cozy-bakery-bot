@@ -6,8 +6,27 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-channel_id = os.getenv("CAPTION_CHANNEL_ID", "").strip()
-CAPTION_CHANNEL_ID = int(channel_id) if channel_id else None
+channel_id = os.getenv(
+    "CAPTION_CHANNEL_ID",
+      ""
+).strip()
+
+CAPTION_CHANNEL_ID = (
+    int(channel_id) 
+    if channel_id 
+    else None
+)
+
+finalized_channel_id = os.getenv(
+    "FINALIZED_CHANNEL_ID",
+    ""
+).strip()
+
+FINALIZED_CHANNEL_ID = (
+    int(finalized_channel_id)
+    if finalized_channel_id
+    else None
+)
 
 OPENAI_MODEL = "gpt-5.6-sol"
 OPENAI_REASONING_EFFORT = "high"

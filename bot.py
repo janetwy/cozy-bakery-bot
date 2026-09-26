@@ -5,7 +5,8 @@ from discord.ext import commands
 
 from config import (
     DISCORD_BOT_TOKEN,
-    CAPTION_CHANNEL_ID
+    CAPTION_CHANNEL_ID,
+    FINALIZED_CHANNEL_ID
 )
 
 from database import (
@@ -17,7 +18,8 @@ from database import (
     get_version_by_number,
     get_latest_version,
     get_version_count,
-    finalize_version
+    finalize_version,
+    set_finalized_discord_message
 )
 
 from caption_service import (
@@ -171,7 +173,78 @@ class CustomEditModal(discord.ui.Modal):
                 "Something went wrong while editing the caption.",
                 ephemeral=True
             )
+    
+async def post_finalized_caption(
+    bot: commands.Bot,
+    session_id: int,
+    version
+):
+    session = get_session(session_id)
 
+    if session is None:
+        raise ValueError(
+            f"Caption session {session_id} not found."
+        )
+
+    if FINALIZED_CHANNEL_ID is None:
+        raise ValueError(
+            "FINALIZED_CHANNEL_ID is not configured."
+        )
+
+    channel = bot.get_channel(
+        FINALIZED_CHANNEL_ID
+    )
+
+    if channel is None:
+        channel = await bot.fetch_channel(
+            FINALIZED_CHANNEL_ID
+        )
+
+    # These are the original Discord attachment URLs
+    # saved when the product-photo message was created.
+    image_urls = json.loads(session.image_urls)
+
+    # Putting the URLs in the Discord message causes
+    # Discord to render them as image previews/embeds.
+    image_section = "\n".join(image_urls)
+
+    message_content = (
+        "## ⭐ Ready to Post\n\n"
+        f"{image_section}\n\n"
+        f"### Caption\n"
+        f"{version.caption}\n\n"
+        f"*Version {version.version_number}*"
+    )
+
+    # Update the existing ready-to-post message if this session
+    # has already been finalized.
+    if session.finalized_discord_message_id:
+        try:
+            existing_message = await channel.fetch_message(
+                session.finalized_discord_message_id
+            )
+
+            await existing_message.edit(
+                content=message_content
+            )
+
+            return existing_message
+
+        except discord.NotFound:
+            # It was manually deleted from #ready-to-post.
+            # Create a new message instead.
+            pass
+
+    finalized_message = await channel.send(
+        content=message_content
+    )
+
+    set_finalized_discord_message(
+        session_id,
+        finalized_message.id
+    )
+
+    return finalized_message
 
 # ---------------------------------------------------------
 # Caption buttons
@@ -477,7 +550,6 @@ Do not invent ordering instructions.
             next_number
         )
 
-
     @discord.ui.button(
         label="Finalize",
         emoji="⭐",
@@ -490,7 +562,9 @@ Do not invent ordering instructions.
         button: discord.ui.Button
     ):
 
-        await interaction.response.defer()
+        await interaction.response.defer(
+            ephemeral=True
+        )
 
         version = get_version_by_number(
             self.session_id,
@@ -506,21 +580,57 @@ Do not invent ordering instructions.
 
             return
 
-        finalize_version(
-            self.session_id,
-            version.id
-        )
+        try:
 
-        await self.refresh_message(
-            interaction,
-            version.version_number
-        )
+            #
+            # Mark this version as approved.
+            #
+            finalize_version(
+                self.session_id,
+                version.id
+            )
 
-        await interaction.followup.send(
-            f"⭐ Version {version.version_number} "
-            "has been saved as the approved caption.",
-            ephemeral=True
-        )
+            #
+            # Post/update it in #ready-to-post.
+            #
+            await post_finalized_caption(
+                bot,
+                self.session_id,
+                version
+            )
+
+            #
+            # Refresh original caption message.
+            #
+            await self.refresh_message(
+                interaction,
+                version.version_number
+            )
+
+            await interaction.followup.send(
+                (
+                    f"⭐ Version {version.version_number} "
+                    "has been approved and sent to "
+                    "the ready-to-post channel."
+                ),
+                ephemeral=True
+            )
+
+        except Exception as error:
+
+            print(
+                "Finalize error:",
+                error
+            )
+
+            await interaction.followup.send(
+                (
+                    "The caption was approved, but I had "
+                    "trouble posting it to the "
+                    "ready-to-post channel."
+                ),
+                ephemeral=True
+            )
 
 # ---------------------------------------------------------
 # Bot events
