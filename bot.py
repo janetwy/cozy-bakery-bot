@@ -11,8 +11,13 @@ from config import (
 from database import (
     initialize_database,
     create_session,
+    create_version,
     get_session,
-    update_session
+    get_version,
+    get_version_by_number,
+    get_latest_version,
+    get_version_count,
+    finalize_version
 )
 
 from caption_service import (
@@ -56,9 +61,19 @@ def is_image(attachment: discord.Attachment) -> bool:
     return filename.endswith(IMAGE_EXTENSIONS)
 
 
-def caption_message(caption: str) -> str:
+def caption_message(
+    caption: str,
+    version_number: int,
+    version_count: int,
+    finalized: bool = False
+) -> str:
+
+    status = " ⭐ APPROVED" if finalized else ""
+
     return (
-        "**Instagram Caption**\n\n"
+        f"**Instagram Caption — "
+        f"Version {version_number}/{version_count}"
+        f"{status}**\n\n"
         f"{caption}"
     )
 
@@ -69,10 +84,18 @@ def caption_message(caption: str) -> str:
 
 class CustomEditModal(discord.ui.Modal):
 
-    def __init__(self, session_id: int):
-        super().__init__(title="Edit Instagram Caption")
+    def __init__(
+        self,
+        session_id: int,
+        version_number: int
+    ):
+
+        super().__init__(
+            title="Edit Instagram Caption"
+        )
 
         self.session_id = session_id
+        self.version_number = version_number
 
         self.instructions = discord.ui.TextInput(
             label="What should I change?",
@@ -95,41 +118,49 @@ class CustomEditModal(discord.ui.Modal):
 
         await interaction.response.defer()
 
-        session = get_session(self.session_id)
+        version = get_version_by_number(
+            self.session_id,
+            self.version_number
+        )
 
-        if session is None:
+        if version is None:
+
             await interaction.followup.send(
-                "I couldn't find this caption session.",
+                "I couldn't find this caption version.",
                 ephemeral=True
             )
-            return
 
-        message = interaction.message
-
-        if message is None or session.openai_response_id is None:
-            await interaction.followup.send(
-                "This caption session can't be revised because its message or AI response is unavailable.",
-                ephemeral=True
-            )
             return
 
         try:
 
             caption, response_id = await revise_caption(
-                previous_response_id=session.openai_response_id,
-                current_caption=session.current_caption,
+                previous_response_id=version.openai_response_id,
+                current_caption=version.caption,
                 instruction=self.instructions.value
             )
 
-            update_session(
-                self.session_id,
-                caption,
-                response_id
+            new_version = create_version(
+                session_id=self.session_id,
+                caption=caption,
+                openai_response_id=response_id,
+                revision_type="custom"
             )
 
-            await message.edit(
-                content=caption_message(caption),
-                view=CaptionControls(self.session_id)
+            count = get_version_count(
+                self.session_id
+            )
+
+            await interaction.message.edit(
+                content=caption_message(
+                    new_version.caption,
+                    new_version.version_number,
+                    count
+                ),
+                view=CaptionControls(
+                    self.session_id,
+                    new_version.version_number
+                )
             )
 
         except Exception as error:
@@ -148,58 +179,100 @@ class CustomEditModal(discord.ui.Modal):
 
 class CaptionControls(discord.ui.View):
 
-    def __init__(self, session_id: int):
+    def __init__(
+        self,
+        session_id: int,
+        displayed_version: int
+    ):
 
         super().__init__(timeout=None)
 
         self.session_id = session_id
+        self.displayed_version = displayed_version
+
+
+    async def refresh_message(
+        self,
+        interaction: discord.Interaction,
+        version_number: int
+    ):
+
+        session = get_session(self.session_id)
+
+        version = get_version_by_number(
+            self.session_id,
+            version_number
+        )
+
+        if session is None or version is None:
+            await interaction.followup.send(
+                "I couldn't find that caption version.",
+                ephemeral=True
+            )
+            return
+
+        count = get_version_count(self.session_id)
+
+        is_approved = (
+            session.is_finalized
+            and session.approved_version_id == version.id
+        )
+
+        await interaction.message.edit(
+            content=caption_message(
+                version.caption,
+                version.version_number,
+                count,
+                is_approved
+            ),
+            view=CaptionControls(
+                self.session_id,
+                version.version_number
+            )
+        )
 
 
     async def perform_revision(
         self,
         interaction: discord.Interaction,
-        instruction: str
+        instruction: str,
+        revision_type: str
     ):
 
         await interaction.response.defer()
 
-        session = get_session(self.session_id)
+        version = get_version_by_number(
+            self.session_id,
+            self.displayed_version
+        )
 
-        if session is None:
+        if version is None:
 
             await interaction.followup.send(
-                "I couldn't find this caption session.",
+                "I couldn't find this caption version.",
                 ephemeral=True
             )
 
-            return
-
-        message = interaction.message
-
-        if message is None or session.openai_response_id is None:
-            await interaction.followup.send(
-                "This caption session can't be revised because its message or AI response is unavailable.",
-                ephemeral=True
-            )
             return
 
         try:
 
             caption, response_id = await revise_caption(
-                previous_response_id=session.openai_response_id,
-                current_caption=session.current_caption,
+                previous_response_id=version.openai_response_id,
+                current_caption=version.caption,
                 instruction=instruction
             )
 
-            update_session(
-                self.session_id,
-                caption,
-                response_id
+            new_version = create_version(
+                session_id=self.session_id,
+                caption=caption,
+                openai_response_id=response_id,
+                revision_type=revision_type
             )
 
-            await message.edit(
-                content=caption_message(caption),
-                view=CaptionControls(self.session_id)
+            await self.refresh_message(
+                interaction,
+                new_version.version_number
             )
 
         except Exception as error:
@@ -212,10 +285,15 @@ class CaptionControls(discord.ui.View):
             )
 
 
+    #
+    # Revision controls
+    #
+
     @discord.ui.button(
         label="Regenerate",
         emoji="🔄",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.secondary,
+        row=0
     )
     async def regenerate(
         self,
@@ -232,14 +310,16 @@ Keep all factual product details accurate.
 
 Use a different hook and different wording,
 but maintain the Cozy Cakes & Bakes brand voice.
-"""
+""",
+            "regenerate"
         )
 
 
     @discord.ui.button(
         label="Shorter",
         emoji="✂️",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.secondary,
+        row=0
     )
     async def shorter(
         self,
@@ -254,14 +334,16 @@ Make the caption noticeably shorter and more concise.
 
 Preserve important product information,
 pricing if present, and useful hashtags.
-"""
+""",
+            "shorter"
         )
 
 
     @discord.ui.button(
         label="More Casual",
         emoji="😊",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.secondary,
+        row=0
     )
     async def casual(
         self,
@@ -274,16 +356,18 @@ pricing if present, and useful hashtags.
             """
 Make the caption more casual, warm, and conversational.
 
-It should sound like it was personally written by the
-owner of a small local bakery rather than a marketing department.
-"""
+It should sound personally written by the owner
+of a small local bakery.
+""",
+            "casual"
         )
 
 
     @discord.ui.button(
         label="More Sales-Focused",
         emoji="🛍️",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.secondary,
+        row=0
     )
     async def sales(
         self,
@@ -296,19 +380,21 @@ owner of a small local bakery rather than a marketing department.
             """
 Make the caption slightly more sales-focused.
 
-Highlight why someone would want the product and make
-the important purchasing information easy to notice.
+Highlight why someone would want the product and
+make important purchasing information easy to notice.
 
-Do not become pushy or overly promotional.
+Do not become pushy.
 Do not invent ordering instructions.
-"""
+""",
+            "sales"
         )
 
 
     @discord.ui.button(
         label="Custom Edit",
         emoji="✏️",
-        style=discord.ButtonStyle.primary
+        style=discord.ButtonStyle.primary,
+        row=0
     )
     async def custom_edit(
         self,
@@ -316,10 +402,125 @@ Do not invent ordering instructions.
         button: discord.ui.Button
     ):
 
-        modal = CustomEditModal(self.session_id)
+        modal = CustomEditModal(
+            self.session_id,
+            self.displayed_version
+        )
 
         await interaction.response.send_modal(modal)
 
+
+    #
+    # History controls
+    #
+
+    @discord.ui.button(
+        label="Previous",
+        emoji="◀️",
+        style=discord.ButtonStyle.secondary,
+        row=1
+    )
+    async def previous(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        await interaction.response.defer()
+
+        previous_number = self.displayed_version - 1
+
+        if previous_number < 1:
+
+            await interaction.followup.send(
+                "You're already viewing the first version.",
+                ephemeral=True
+            )
+
+            return
+
+        await self.refresh_message(
+            interaction,
+            previous_number
+        )
+
+
+    @discord.ui.button(
+        label="Next",
+        emoji="▶️",
+        style=discord.ButtonStyle.secondary,
+        row=1
+    )
+    async def next_version(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        await interaction.response.defer()
+
+        count = get_version_count(self.session_id)
+
+        next_number = self.displayed_version + 1
+
+        if next_number > count:
+
+            await interaction.followup.send(
+                "You're already viewing the newest version.",
+                ephemeral=True
+            )
+
+            return
+
+        await self.refresh_message(
+            interaction,
+            next_number
+        )
+
+
+    @discord.ui.button(
+        label="Finalize",
+        emoji="⭐",
+        style=discord.ButtonStyle.success,
+        row=1
+    )
+    async def finalize(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        await interaction.response.defer()
+
+        version = get_version_by_number(
+            self.session_id,
+            self.displayed_version
+        )
+
+        if version is None:
+
+            await interaction.followup.send(
+                "I couldn't find this caption version.",
+                ephemeral=True
+            )
+
+            return
+
+        finalize_version(
+            self.session_id,
+            version.id
+        )
+
+        await self.refresh_message(
+            interaction,
+            version.version_number
+        )
+
+        await interaction.followup.send(
+            f"⭐ Version {version.version_number} "
+            "has been saved as the approved caption.",
+            ephemeral=True
+        )
 
 # ---------------------------------------------------------
 # Bot events
@@ -382,14 +583,26 @@ async def on_message(message: discord.Message):
             discord_message_id=message.id,
             discord_channel_id=message.channel.id,
             user_notes=user_notes,
-            image_urls=json.dumps(image_urls),
+            image_urls=json.dumps(image_urls)
+        )
+
+        version = create_version(
+            session_id=session_id,
             caption=caption,
-            openai_response_id=response_id
+            openai_response_id=response_id,
+            revision_type="original"
         )
 
         await status_message.edit(
-            content=caption_message(caption),
-            view=CaptionControls(session_id)
+            content=caption_message(
+                caption,
+                version_number=1,
+                version_count=1
+            ),
+            view=CaptionControls(
+                session_id,
+                displayed_version=1
+            )
         )
 
     except Exception as error:
